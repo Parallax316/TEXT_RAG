@@ -1,0 +1,60 @@
+# Add your project requirements here 
+# For example: 
+fastapi
+uvicorn[standard]
+streamlit
+python-dotenv
+pypdf
+pytesseract
+Pillow>=9.0.0
+unstructured>=0.10.0
+tiktoken
+pydantic_settings
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers
+fitz
+tools
+python-multipart
+requests
+langchain-text-splitters
+langchain-community
+# Additional dependencies for deployment
+huggingface-hub
+gunicorn
+
+# Core dependencies
+streamlit==1.32.0
+fastapi==0.110.0
+uvicorn==0.27.1
+python-multipart==0.0.9
+python-dotenv==1.0.1
+pydantic==2.6.3
+pydantic-settings==2.2.1
+langchain==0.1.12
+langchain-openai==0.0.8
+langchain-community==0.0.27
+langchain-core==0.1.30
+chromadb==0.4.24
+sentence-transformers==2.5.1
+pytesseract==0.3.10
+pdf2image==1.17.0
+pillow==10.2.0
+python-magic==0.4.27
+python-magic-bin==0.4.14
+beautifulsoup4==4.12.3
+lxml==5.1.0
+openpyxl==3.1.2
+pandas==2.2.1
+numpy==1.26.4
+scikit-learn==1.4.1
+tqdm==4.66.2
+
+# Development dependencies
+pytest==8.0.2
+black==24.2.0
+isort==5.13.2
+flake8==7.0.0
+
+clustering and summarisation is starting after the query is enterend instead it should begin after the collection is selected in the frontend , so it is only done once at the start instead of doing it again and again after each query

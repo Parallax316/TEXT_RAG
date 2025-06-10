@@ -281,6 +281,9 @@ GET /: Root endpoint - Welcome message
 
 GET /api/v1/openapi.json: OpenAPI documentation
 
+- [API Documentation (Swagger UI)](http://localhost:8000/docs)
+- [Redoc Documentation](http://localhost:8000/redoc)
+
 🔒 Security
 
 API key management for LLM services

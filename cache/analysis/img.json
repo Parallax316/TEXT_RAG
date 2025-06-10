@@ -1,0 +1,14 @@
+{
+  "collection_name": "img",
+  "total_documents": 12,
+  "number_of_clusters": 2,
+  "noise_points": 0,
+  "domain_analysis": "1. Main field of study: The document does not pertain to a specific academic or scholarly field.\n\n2. Specific domain: The",
+  "cluster_summaries": {
+    "0": "The document presents a jumble of seemingly random characters, symbols, and words, lacking coherence without additional context.",
+    "1": "A document discusses Lucknow's culinary scene, including popular eateries and shops, as well as the city's iconic Hussainabad Clock Tower and its historical significance.\n\nHope this helps! Let me know if you need anything else."
+  },
+  "overall_summary": "Cluster 0: A jumbled, incoherent collection of characters and words.\nCluster 1: Lucknow's culinary scene, notable landmarks, and historical significance.",
+  "collection_hash": "e750ed2d17bc3fa25b827ad66ba7bf11",
+  "cached_at": 1748932748.1172233
+}

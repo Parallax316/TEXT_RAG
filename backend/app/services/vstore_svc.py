@@ -1,21 +1,22 @@
 import uuid
 from typing import List, Dict, Any, Optional, Tuple
 import logging
+from bson import ObjectId
+from datetime import datetime
 
-import chromadb
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
 from langchain_core.documents import Document as LangchainDocument
-import os
+from backend.app.core.mongodb import create_collection as mongo_create_collection, drop_collection as mongo_drop_collection, list_collections as mongo_list_collections, insert_embedding, find_embeddings
+from backend.app.models.schemas import DocumentStatus, DocumentStatusResponse
 
 from backend.app.core.config import settings
+from backend.app.core.exceptions import DocumentProcessingError, EmbeddingError, RetrievalError, LLMError
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 class VectorStoreService:
     _instance = None
-    _langchain_chroma_instance: Optional[Chroma] = None
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
@@ -36,245 +37,230 @@ class VectorStoreService:
             )
             logger.info("HuggingFaceEmbeddings loaded successfully.")
         except Exception as e:
-            logger.error(f"Error loading HuggingFaceEmbeddings: {e}")
-            self.embedding_function = None
+            raise EmbeddingError(f"Error initializing HuggingFaceEmbeddings: {e}")
 
-        try:
-            if self.embedding_function:
-                logger.info(f"Initializing LangChain Chroma vector store at path: {settings.CHROMA_DB_PATH}")
-                logger.info(f"Using collection name: {settings.CHROMA_COLLECTION_NAME}")
-                self._langchain_chroma_instance = Chroma(
-                    collection_name=settings.CHROMA_COLLECTION_NAME,
-                    embedding_function=self.embedding_function,
-                    persist_directory=settings.CHROMA_DB_PATH
-                )
-                logger.info("LangChain Chroma vector store initialized successfully.")
-            else:
-                self._langchain_chroma_instance = None
-                logger.warning("Embedding function not available, LangChain Chroma not initialized.")
-        except Exception as e:
-            logger.error(f"Error initializing LangChain Chroma vector store: {e}")
-            self._langchain_chroma_instance = None
-
-        # Initialize ChromaDB client with configuration from settings
-        try:
-            logger.info(f"Initializing ChromaDB client at path: {settings.CHROMA_DB_PATH}")
-            os.makedirs(settings.CHROMA_DB_PATH, exist_ok=True)
-            self.client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
-            self._ensure_default_collection()
-            logger.info("ChromaDB client initialized successfully.")
-        except Exception as e:
-            logger.error(f"Error initializing ChromaDB client: {e}")
-            self.client = None
+        # self.chroma_instance = self._langchain_chroma_instance  # Removed: not needed for MongoDB
 
         self._initialized = True
         logger.info("VectorStoreService (Latest LangChain) initialization complete.")
 
-    def _ensure_default_collection(self):
-        """Ensure the default collection exists."""
-        try:
-            self.client.get_collection("default")
-        except:
-            self.client.create_collection("default")
-
     def create_collection(self, name: str) -> bool:
-        """Create a new collection."""
-        logger.info(f"Attempting to create collection: {name}")
+        logger.info(f"Creating MongoDB collection: {name}")
         try:
-            # Check if collection already exists
-            try:
-                logger.info(f"Checking if collection {name} already exists")
-                self.client.get_collection(name)
-                logger.warning(f"Collection {name} already exists")
-                raise ValueError(f"Collection '{name}' already exists")
-            except Exception as e:
-                if "does not exists" in str(e).lower():
-                    # This is what we want - collection doesn't exist, we can create it
-                    logger.info(f"Collection {name} does not exist, proceeding with creation")
-                else:
-                    logger.error(f"Error checking collection existence: {e}")
-                    raise e
-            
-            # Create the collection
-            logger.info(f"Creating collection: {name}")
-            self.client.create_collection(name)
+            mongo_create_collection(name)
             logger.info(f"Successfully created collection: {name}")
             return True
         except Exception as e:
-            if "already exists" in str(e).lower():
-                logger.warning(f"Collection {name} already exists")
-                raise ValueError(f"Collection '{name}' already exists")
-            logger.error(f"Error creating collection {name}: {e}")
-            raise e
+            logger.error(f"Error creating collection: {e}")
+            raise ValueError(f"Failed to create collection '{name}': {e}")
 
     def list_collections(self) -> List[Tuple[str, int]]:
-        """List all collections with their document counts."""
-        collections = self.client.list_collections()
-        return [(col.name, col.count()) for col in collections]
+        logger.info("Listing MongoDB collections")
+        collection_names = mongo_list_collections()
+        # Exclude system collections if needed
+        filtered = [name for name in collection_names if not name.startswith('system.') and name != 'system_config']
+        from backend.app.core.mongodb import db
+        result = []
+        for name in filtered:
+            count = db[name].count_documents({})
+            result.append((name, count))
+        return result
 
     def delete_collection(self, name: str) -> bool:
-        """Delete a collection."""
+        logger.info(f"Deleting MongoDB collection: {name}")
         try:
-            self.client.delete_collection(name)
+            mongo_drop_collection(name)
+            logger.info(f"Successfully deleted collection: {name}")
             return True
         except Exception as e:
-            if "not found" in str(e):
-                return False
-            raise e
-
-    def get_collection(self, name: str = "default"):
-        """Get a collection by name."""
-        return self.client.get_collection(name)
+            logger.error(f"Error deleting collection: {e}")
+            raise ValueError(f"Failed to delete collection '{name}': {e}")
 
     def add_documents(self, chunks: List[str], metadatas: List[Dict[str, Any]], doc_ids: Optional[List[str]] = None, collection_name: Optional[str] = None) -> bool:
-        """Add documents to the vector store."""
         if not chunks:
-            print("No chunks provided to add.")
+            logger.warning("No chunks provided to add.")
             return False
         if len(chunks) != len(metadatas):
-            print("Error: The number of chunks and metadatas must be the same.")
+            logger.error("The number of chunks and metadatas must be the same.")
             return False
-
-        documents_to_add = []
         for i, chunk_text in enumerate(chunks):
-            processed_metadata = {}
-            for k, v in metadatas[i].items():
-                if isinstance(v, (list, dict, tuple)):
-                    processed_metadata[k] = str(v)
-                elif v is None:
-                    processed_metadata[k] = ""
-                else:
-                    processed_metadata[k] = v
-
-            documents_to_add.append(
-                LangchainDocument(page_content=chunk_text, metadata=processed_metadata)
-            )
-
-        if not doc_ids or len(doc_ids) != len(documents_to_add):
-            doc_ids = [str(uuid.uuid4()) for _ in documents_to_add]
-
-        try:
-            # Use the specified collection or default to the configured one
-            collection = collection_name or settings.CHROMA_COLLECTION_NAME
-            print(f"Adding {len(documents_to_add)} chunks to collection '{collection}'...")
-            
-            # Create a new Chroma instance for the specified collection
-            chroma_instance = Chroma(
-                collection_name=collection,
-                embedding_function=self.embedding_function,
-                persist_directory=settings.CHROMA_DB_PATH
-            )
-            
-            added_ids = chroma_instance.add_documents(
-                documents=documents_to_add,
-                ids=doc_ids
-            )
-            print(f"Successfully stored {len(added_ids)} chunks in collection '{collection}'.\n{'='*60}")
-            return True
-        except Exception as e:
-            print(f"Error adding documents via LangChain Chroma: {e}")
-            return False
+            doc = {
+                "collection_name": collection_name,
+                "type": "text",
+                "embedding": metadatas[i].get("embedding"),
+                "data": {"chunk_text": chunk_text},
+                "metadata": metadatas[i]  # Store the metadata directly, not nested
+            }
+            insert_embedding(doc)
+        logger.info(f"Added {len(chunks)} documents to collection '{collection_name}' in MongoDB.")
+        return True
 
     def query_documents_with_scores(self, query_text: str, n_results: int = 5, filter_dict: Optional[Dict[str, Any]] = None, collection_name: Optional[str] = None) -> Optional[List[Tuple[LangchainDocument, float]]]:
-        if not self._langchain_chroma_instance:
-            print("Error: LangChain Chroma vector store not initialized.")
-            return None
+        logger.info(f"Querying MongoDB collection '{collection_name}' for text documents.")
+        query = {"collection_name": collection_name, "type": "text"}
+        docs = find_embeddings(query)
+        # Convert MongoDB docs to LangChain Document objects
+        from langchain_core.documents import Document as LangchainDocument
+        langchain_docs = []
+        for doc in docs[:n_results]:
+            # Extract content from the correct location
+            data = doc.get('data', {})
+            content = data.get('chunk_text', '') if isinstance(data, dict) else ''
+            if not content:
+                content = doc.get('content', doc.get('text', ''))
+            
+            # Extract metadata from both doc level and nested metadata
+            doc_metadata = doc.get('metadata', {})
+            metadata = {
+                'source_doc_id': doc_metadata.get('source_doc_id', doc.get('source_doc_id', 'N/A')),
+                'file_name': doc_metadata.get('file_name', doc.get('file_name', 'N/A')),
+                'page_number': doc_metadata.get('page_number', doc.get('page_number')),
+                'paragraph_number_in_page': doc_metadata.get('paragraph_number_in_page', doc.get('paragraph_number_in_page')),
+                'chunk_index': doc_metadata.get('chunk_index', doc.get('chunk_index'))
+            }
+            
+            if content:  # Only add documents with content
+                langchain_docs.append(LangchainDocument(page_content=content, metadata=metadata))
+        
+        # Return LangChain Document objects with dummy score 0.0 (add embedding similarity if needed)
+        results = [(doc, 0.0) for doc in langchain_docs]
+        return results
 
+    def _serialize_doc(self, doc):
+        doc = dict(doc)
+        if '_id' in doc and isinstance(doc['_id'], ObjectId):
+            doc['_id'] = str(doc['_id'])
+        return doc
+
+    def get_collection(self, name: str = "default"):
+        from backend.app.core.mongodb import db
+        return db[name]
+    
+    # Document Status Management Methods
+    def store_document_metadata(self, doc_id: str, filename: str, collection_name: str = "default") -> bool:
+        """Store document metadata without processing"""
         try:
-            # Use the specified collection name from the frontend
-            if not collection_name:
-                print("Error: No collection name provided")
+            from backend.app.core.mongodb import db
+            doc_metadata = {
+                "_id": doc_id,
+                "filename": filename,
+                "collection_name": collection_name,
+                "status": DocumentStatus.UPLOADED,
+                "upload_time": datetime.utcnow(),
+                "processing_time": None,
+                "error_message": None,
+                "chunk_count": 0
+            }
+            
+            result = db["document_metadata"].insert_one(doc_metadata)
+            logger.info(f"Stored metadata for document {doc_id} in collection {collection_name}")
+            return bool(result.inserted_id)
+            
+        except Exception as e:
+            logger.error(f"Error storing document metadata for {doc_id}: {str(e)}")
+            return False
+    
+    def get_document_status(self, doc_id: str) -> Optional[DocumentStatusResponse]:
+        """Get document processing status"""
+        try:
+            from backend.app.core.mongodb import db
+            doc = db["document_metadata"].find_one({"_id": doc_id})
+            
+            if not doc:
                 return None
                 
-            print(f"Querying LangChain Chroma collection '{collection_name}' with MMR (n_results={n_results}, filter={filter_dict})...")
-            
-            # Create a new Chroma instance for the specified collection
-            chroma_instance = Chroma(
-                collection_name=collection_name,
-                embedding_function=self.embedding_function,
-                persist_directory=settings.CHROMA_DB_PATH
+            return DocumentStatusResponse(
+                doc_id=doc["_id"],
+                filename=doc["filename"],
+                status=doc["status"],
+                upload_time=doc.get("upload_time"),
+                processing_time=doc.get("processing_time"),
+                error_message=doc.get("error_message"),
+                chunk_count=doc.get("chunk_count", 0),
+                collection_name=doc["collection_name"]
             )
             
-            # Debug: Check if collection exists and has documents
-            collection_count = chroma_instance._collection.count()  # type: ignore
-            print(f"Collection '{collection_name}' has {collection_count} documents")
-            
-            retriever = chroma_instance.as_retriever(
-                search_type="mmr",
-                search_kwargs={
-                    'k': n_results,
-                    'fetch_k': max(20, n_results * 3),
-                    'lambda_mult': 0.7
-                }
-            )
-            relevant_docs = retriever.get_relevant_documents(query_text, filter=filter_dict)
-            print(f"MMR retrieved {len(relevant_docs)} docs. Reranking step would follow if implemented.")
-            # If you have a reranker, you would pass relevant_docs to it here and get (doc, score) tuples.
-            # For now, simulate scores as 0.0 for compatibility.
-            mmr_results_with_simulated_scores = [(doc, 0.0) for doc in relevant_docs]
-            return mmr_results_with_simulated_scores[:n_results]
         except Exception as e:
-            print(f"Error querying LangChain Chroma with MMR: {e}")
+            logger.error(f"Error getting document status for {doc_id}: {str(e)}")
             return None
-
-    def get_collection_count(self) -> Optional[int]:
-        if not self._langchain_chroma_instance:
-            print("Error: LangChain Chroma vector store not initialized.")
-            return None
+    
+    def update_document_status(self, doc_id: str, status: DocumentStatus, 
+                             error_message: str = None, chunk_count: int = None) -> bool:
+        """Update document processing status"""
         try:
-            if hasattr(self._langchain_chroma_instance, '_collection') and self._langchain_chroma_instance._collection:
-                return self._langchain_chroma_instance._collection.count()  # type: ignore
-            print("Warning: Using less efficient method for collection count (getting all IDs).")
-            chroma_collection = self._langchain_chroma_instance.get()
-            return len(chroma_collection.get('ids', []))
-        except Exception as e:
-            print(f"Error getting LangChain Chroma collection count: {e}")
-            return None
-
-    def delete_documents(self, doc_ids: List[str]) -> bool:
-        if not self._langchain_chroma_instance:
-            print("Error: LangChain Chroma vector store not initialized.")
-            return False
-        if not doc_ids:
-            print("No document IDs provided for deletion.")
-            return False
-        try:
-            print(f"Attempting to delete {len(doc_ids)} documents from collection (IDs: {doc_ids})...")
-            self._langchain_chroma_instance.delete(ids=doc_ids)
-            print(f"Documents with IDs {doc_ids} delete call processed.")
-            return True
-        except Exception as e:
-            print(f"Error or issue deleting documents from LangChain Chroma: {e}")
-            return False
-
-    def add_documents_to_collection(self, documents: List[Dict], collection_name: str = "default"):
-        """Add documents to a collection."""
-        collection = self.get_collection(collection_name)
-        collection.add(
-            documents=[doc["content"] for doc in documents],
-            metadatas=[doc["metadata"] for doc in documents],
-            ids=[doc["id"] for doc in documents]
-        )
-
-    def query_collection(self, query_text: str, n_results: int = 5, collection_name: str = "default") -> List[Dict]:
-        """Query documents from a collection."""
-        collection = self.get_collection(collection_name)
-        results = collection.query(
-            query_texts=[query_text],
-            n_results=n_results
-        )
-        
-        return [
-            {
-                "id": id,
-                "content": doc,
-                "metadata": metadata,
-                "distance": distance
-            }
-            for id, doc, metadata, distance in zip(
-                results["ids"][0],
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0]
+            from backend.app.core.mongodb import db
+            update_data = {"status": status}
+            
+            if status == DocumentStatus.PROCESSING:
+                update_data["processing_time"] = datetime.utcnow()
+            elif status in [DocumentStatus.PROCESSED, DocumentStatus.ERROR]:
+                if error_message:
+                    update_data["error_message"] = error_message
+                if chunk_count is not None:
+                    update_data["chunk_count"] = chunk_count
+            
+            result = db["document_metadata"].update_one(
+                {"_id": doc_id},
+                {"$set": update_data}
             )
-        ]
+            
+            logger.info(f"Updated status for document {doc_id} to {status}")
+            return result.modified_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error updating document status for {doc_id}: {str(e)}")
+            return False
+    
+    def get_unprocessed_documents(self, collection_name: str = "default") -> List[DocumentStatusResponse]:
+        """Get all unprocessed documents in a collection"""
+        try:
+            from backend.app.core.mongodb import db
+            docs = db["document_metadata"].find({
+                "collection_name": collection_name,
+                "status": {"$in": [DocumentStatus.UPLOADED, DocumentStatus.ERROR]}
+            })
+            
+            result = []
+            for doc in docs:
+                result.append(DocumentStatusResponse(
+                    doc_id=doc["_id"],
+                    filename=doc["filename"],
+                    status=doc["status"],
+                    upload_time=doc.get("upload_time"),
+                    processing_time=doc.get("processing_time"),
+                    error_message=doc.get("error_message"),
+                    chunk_count=doc.get("chunk_count", 0),
+                    collection_name=doc["collection_name"]
+                ))
+            
+            logger.info(f"Found {len(result)} unprocessed documents in collection {collection_name}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting unprocessed documents: {str(e)}")
+            return []
+    
+    def get_all_document_statuses(self, collection_name: str = "default") -> List[DocumentStatusResponse]:
+        """Get status of all documents in a collection"""
+        try:
+            from backend.app.core.mongodb import db
+            docs = db["document_metadata"].find({"collection_name": collection_name})
+            
+            result = []
+            for doc in docs:
+                result.append(DocumentStatusResponse(
+                    doc_id=doc["_id"],
+                    filename=doc["filename"],
+                    status=doc["status"],
+                    upload_time=doc.get("upload_time"),
+                    processing_time=doc.get("processing_time"),
+                    error_message=doc.get("error_message"),
+                    chunk_count=doc.get("chunk_count", 0),
+                    collection_name=doc["collection_name"]
+                ))
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting all document statuses: {str(e)}")
+            return []

@@ -6,12 +6,15 @@ from typing import List, Dict, Any, Optional, Tuple
 import time 
 
 # Local application imports
-from backend.app.core.config import settings 
+from backend.app.core.config import settings
 from backend.app.services.vstore_svc import VectorStoreService
+from backend.app.core.exceptions import DocumentProcessingError, EmbeddingError, RetrievalError, LLMError
 from langchain_core.documents import Document as LangchainDocument 
 
 # For Cross-Encoder Reranking
 from sentence_transformers import CrossEncoder
+from backend.app.services.theme_analyzer import ThemeAnalyzer
+from backend.app.services.citation_manager import CitationManager
 
 class RAGService:
     """
@@ -61,11 +64,9 @@ class RAGService:
                 print(f"LLM response malformed. Details: {response_json.get('error', 'Unknown')}")
                 return None
         except requests.exceptions.RequestException as e:
-            print(f"API request failed for LLM call: {e}")
-            return None
+            raise LLMError(f"API request failed for LLM call: {e}")
         except Exception as e:
-            print(f"Unexpected error during LLM call: {e}")
-            return None
+            raise LLMError(f"Unexpected error during LLM call: {e}")
 
     def _rerank_documents(self, query: str, documents: List[LangchainDocument], top_n: int) -> List[Tuple[LangchainDocument, float]]:
         """Reranks documents using the CrossEncoder and returns top_n with scores."""
@@ -134,7 +135,8 @@ class RAGService:
             "document_details": []
         }
 
-        if not self.vector_store_service._langchain_chroma_instance:
+        # Check if VectorStoreService is properly initialized
+        if not hasattr(self.vector_store_service, '_initialized') or not self.vector_store_service._initialized:
             print("VectorStoreService not properly initialized.")
             default_empty_response["answer"] = "Error: Knowledge base connection unavailable."
             return default_empty_response
@@ -197,10 +199,51 @@ class RAGService:
 
         formatted_context = self._format_context_for_prompt(reranked_docs_with_scores, doc_to_ref_map)
         
+        # Get cluster analysis summary if available
+        try:
+            from backend.app.services.cluster_analysis_svc import ClusterAnalysisService
+            cluster_service = ClusterAnalysisService()
+            cluster_analysis = cluster_service.analyze_collection(collection_name)
+            domain_analysis = cluster_analysis.get("domain_analysis", "")
+            overall_summary = cluster_analysis.get("overall_summary", "")
+            # Use cluster_analysis["themes"] for theme identification if available
+            clustering_themes = cluster_analysis.get("themes", [])
+        except Exception as e:
+            print(f"Error getting cluster analysis: {e}")
+            domain_analysis = ""
+            overall_summary = ""
+            clustering_themes = []
+
+        # If clustering-based themes are available, use them for theme identification
+        identified_themes = []
+        if clustering_themes:
+            for theme in clustering_themes:
+                identified_themes.append({
+                    "theme_summary": theme.get("summary", ""),
+                    "supporting_reference_numbers": theme.get("reference_numbers", [])
+                })
+        else:
+            # fallback to LLM-based theme extraction below
+            pass
+
         # Updated prompt with more forceful instructions for themes and references
-        prompt_template = f"""You are a highly proficient AI Research Assistant. Your expertise lies in analyzing and synthesizing information from academic research papers.
+        prompt_template = f"""You are a research assistant with access to a knowledge base. The knowledge base contains the following information:
+
+Domain Analysis:
+{domain_analysis}
+
+Overall Collection Summary:
+{overall_summary}
+
 You will be provided with a user's query and a collection of context snippets. Each snippet is identified by a 'RefNum' (e.g., RefNum: [1]), its original SourceDocID, Paper name, Page, Paragraph, and RerankScore.
-Your response must be strictly grounded in these provided snippets. DO NOT use any external knowledge.
+
+If the query is a general greeting or asking about the content of the documents, respond with:
+"Hey, I'm your research assistant. My knowledge base contains information about [brief summary based on domain analysis and overall summary]. How can I help you with this topic?"
+
+If the query is about something not found in the documents, respond with:
+"I can only provide information from my knowledge base, which contains [brief summary of domain/field]. I couldn't find information about your query in the available documents."
+
+For all other queries, your response must be strictly grounded in these provided snippets. DO NOT use any external knowledge.
 
 Your primary objectives are:
 
@@ -367,6 +410,27 @@ This section should:
                                     "source_doc_id": source_doc_id
                                 })
 
+            # --- Citation Verification and Deduplication ---
+            verified_references = []
+            seen = set()
+            for ref in generated_references:
+                # Verify citation exists in reranked_docs_with_scores metadata
+                ref_doc_id = ref.get("source_doc_id")
+                ref_file = ref.get("file_name")
+                found = False
+                for doc, _ in reranked_docs_with_scores:
+                    meta = doc.metadata
+                    if meta.get("source_doc_id") == ref_doc_id and meta.get("file_name") == ref_file:
+                        found = True
+                        key = (ref_doc_id, meta.get("page_number"), meta.get("paragraph_number_in_page"))
+                        if key not in seen:
+                            seen.add(key)
+                            verified_references.append(ref)
+                        break
+                if not found:
+                    print(f"Warning: Citation {ref} not found in source documents. Skipping.")
+            generated_references = verified_references
+
             return {
                 "answer": final_answer,
                 "themes": identified_themes,
@@ -392,8 +456,13 @@ if __name__ == "__main__":
     # Ensure it calls get_answer_and_themes and prints the full response including 'references'
     print("--- Testing RAGService (with Reranker and Numerical Citations - Robust Parsing) ---")
     vstore_service = VectorStoreService()
-    if not vstore_service._langchain_chroma_instance:
-        print("CRITICAL: VectorStoreService did not initialize. Aborting.")
+    # MongoDB-based VectorStoreService initialization check
+    try:
+        # Test that the service is properly initialized
+        vstore_service.get_collection("test")
+        print("VectorStoreService initialized successfully with MongoDB.")
+    except Exception as e:
+        print(f"CRITICAL: VectorStoreService did not initialize properly: {e}. Aborting.")
         exit()
     
     test_chunks_for_rag = [

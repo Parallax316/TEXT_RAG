@@ -1,0 +1,23 @@
+{
+  "collection_name": "docs",
+  "total_documents": 6830,
+  "number_of_clusters": 11,
+  "noise_points": 105,
+  "domain_analysis": "The field of study encompasses both Astrophysics and Planetary Science, with a specific focus on the dynamics of celestial body collisions and the subsequent ejection of material.\n\nThe key terms and concepts include probabilities, collisions, ejected bodies, and terrestrial planets. The content type relates to scientific research papers or studies, which utilize computational or theoretical modeling to understand celestial body interactions within our Solar System.\n\nFurthermore, the document delves into the dynamics of ejected material from the Earth, exploring the movement of these ejecta, the likelihood of their collision with other planets, and the timescales over which",
+  "cluster_summaries": {
+    "0": "The document examines the probabilities of collisions between bodies ejected from the forming Earth and terrestrial planets, within the context of the evolution of the solar system, particularly focusing on Earth, terrestrial planets, and the processes shaping their orbits and collisions.",
+    "1": "The document features Fig. S1b and another figure (Fig. S1c) as part of a series of related images or data.",
+    "2": "An email from a University of Tokyo researcher, with ORCID identifiers, discusses a specific topic or finding.",
+    "3": "The document is a placeholder with no discernible content about a main topic or finding.",
+    "4": "The document is a comprehensive compilation of references, likely focusing on a specific topic or finding within a broader field of study.",
+    "5": "The document, published under the Creative Commons Attribution 4.0 license, allows for content to be freely shared and adapted, provided proper attribution to the author(s), the work's title, journal citation, and DOI are maintained.",
+    "6": "The document is a compilation of profiles with associated ORCID identifiers for various individuals, without providing specific information about a main topic or finding.",
+    "7": "The document outlines a biological model using a multivariate normal distribution, applying Bayesian model comparison via Bayes factors, and provides a conversion table translating Bayes factors to sigma levels, categorizing detection strength.",
+    "8": "A study reveals that the majority of individuals (RC only) and a subset of total participants (TC only) show a specific metric (30 for RC only and 3.5 exclusively for RC only), with a separate numerical value of 0.6 highlighting two main topics or findings.",
+    "9": "The document presents a study on the effects of sleep deprivation on cognitive performance and a statistical analysis of the impact of the COVID-19 pandemic on the U.S. economy from February to May 2020.",
+    "10": "The document outlines the Wiggled Funnel model (Zhou+2023), which quantifies the contribution of wiggling to the overall funnel effect in a given context, emphasizing the main topic or finding."
+  },
+  "overall_summary": "1. Cluster 0 focuses on the dynamics of celestial bodies, specifically the interactions and potential collisions of ejected bodies from Earth and other terrestrial planets, within the context of solar system evolution.\n\n2. Cluster 1 pertains to the presentation of multiple figures within a research context, indicating the inclusion of visual data representation.\n\n3. Cluster 2 involves an email exchange from a University of Tokyo researcher, highlighting the academic communication and collaboration within the scientific community.\n\n4. Cluster 3 is an empty placeholder, indicating a section or document without specific content related to a main topic or finding.\n\n5. Cluster 4 describes a collection",
+  "collection_hash": "3e932391b64bfd66009a8d09a8073444",
+  "cached_at": 1748930017.38694
+}

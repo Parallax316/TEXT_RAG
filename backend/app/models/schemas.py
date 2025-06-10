@@ -3,11 +3,38 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from enum import Enum
+from datetime import datetime
+
+# --- Document Status Enum ---
+class DocumentStatus(str, Enum):
+    UPLOADED = "uploaded"
+    PROCESSING = "processing" 
+    PROCESSED = "processed"
+    ERROR = "error"
 
 # --- Processing Mode Enum ---
 class ProcessingMode(str, Enum):
     ACCURATE_LLM = "accurate_llm"
     FAST_RULE_BASED = "fast_rule_based" # Kept for potential future use, though not active in UI
+
+# --- Document Status Schemas ---
+class DocumentStatusResponse(BaseModel):
+    doc_id: str
+    filename: str
+    status: DocumentStatus
+    upload_time: Optional[datetime] = None
+    processing_time: Optional[datetime] = None
+    error_message: Optional[str] = None
+    chunk_count: Optional[int] = None
+    collection_name: str
+
+class ProcessDocumentRequest(BaseModel):
+    doc_id: str
+    collection_name: Optional[str] = "default"
+
+class ProcessBatchRequest(BaseModel):
+    collection_name: Optional[str] = "default"
+    doc_ids: Optional[List[str]] = None  # If None, process all unprocessed docs
 
 # --- Document Processing Schemas ---
 class DocumentProcessResponse(BaseModel):

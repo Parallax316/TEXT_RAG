@@ -9,10 +9,8 @@ from backend.app.core.config import settings
 
 # Import services
 from backend.app.services.vstore_svc import VectorStoreService
-from backend.app.services.doc_parser import DocParserService as AccurateDocParserService # LLM based
 from backend.app.services.doc_parser_fast import DocParserFastService
 from backend.app.services.rag_svc import RAGService
-
 from backend.app.api.collection_api import router as collection_router
 
 app = FastAPI(
@@ -43,7 +41,6 @@ app.include_router(collection_router, prefix=settings.API_V1_STR, tags=["Collect
 # These will be created by the Depends system on first use if not created here.
 # Explicitly creating them on startup can help catch initialization errors early.
 _vector_store_service_instance_main: VectorStoreService
-_doc_parser_llm_instance_main: AccurateDocParserService
 _doc_parser_fast_instance_main: DocParserFastService
 _rag_service_instance_main: RAGService
 
@@ -53,20 +50,17 @@ async def startup_event():
     Initialize services when the application starts up.
     """
     print("FastAPI application starting up...")
-    global _vector_store_service_instance_main, _doc_parser_llm_instance_main, \
-           _doc_parser_fast_instance_main, _rag_service_instance_main
+    global _vector_store_service_instance_main, _doc_parser_fast_instance_main, _rag_service_instance_main
     
     print("Initializing services on startup...")
     _vector_store_service_instance_main = VectorStoreService()
     
-    # Initialize both parsers
-    _doc_parser_llm_instance_main = AccurateDocParserService(vector_store_service=_vector_store_service_instance_main)
+    # Initialize the fast parser only
     _doc_parser_fast_instance_main = DocParserFastService(vector_store_service=_vector_store_service_instance_main)
     
     _rag_service_instance_main = RAGService(vector_store_service=_vector_store_service_instance_main)
     
-    print("VectorStoreService initialized:", "Yes" if _vector_store_service_instance_main._langchain_chroma_instance else "No")
-    print("AccurateDocParserService (LLM) initialized:", "Yes" if _doc_parser_llm_instance_main else "No")
+    print("VectorStoreService initialized: Yes")
     print("DocParserFastService (Rule-based) initialized:", "Yes" if _doc_parser_fast_instance_main else "No")
     print("RAGService initialized:", "Yes" if _rag_service_instance_main else "No")
     

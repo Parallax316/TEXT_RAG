@@ -4,6 +4,9 @@ from PIL import Image
 import os
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+import re
+import nltk
+nltk.download('punkt', quiet=True)
 
 # Imports for semantic chunking
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,6 +16,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 # Local application imports
 from backend.app.core.config import settings
 from backend.app.services.vstore_svc import VectorStoreService
+from backend.app.core.exceptions import DocumentProcessingError, EmbeddingError, RetrievalError, LLMError
 
 class DocParserFastService:
     """
@@ -52,18 +56,36 @@ class DocParserFastService:
 
     def _is_heading(self, text: str) -> bool:
         """
-        Detect if a line/paragraph is a heading based on heuristic:
-        - Mostly uppercase or capitalized and short (< 8 words)
+        Improved heading detection:
+        - Short lines (<= 10 words)
+        - Mostly capitalized or all uppercase
+        - Ends with colon or is bold-like
+        - Matches common heading patterns (e.g., numbered, roman numerals)
         """
-        words = text.strip().split()
-        if len(words) <= 8 and sum(1 for w in words if w.isupper()) >= len(words) * 0.6:
+        text = text.strip()
+        if not text:
+            return False
+        words = text.split()
+        if len(words) > 10:
+            return False
+        # Regex for numbered/roman headings
+        if re.match(r'^(\d+\.|[IVXLC]+\.|[A-Z]\.)', text):
+            return True
+        # All uppercase or mostly capitalized
+        if text.isupper() or sum(1 for w in words if w.istitle()) >= len(words) * 0.7:
+            return True
+        # Ends with colon
+        if text.endswith(":"):
+            return True
+        # Bold-like (heuristic: no punctuation, short, capitalized)
+        if text == text.title() and not any(c in text for c in '.!?'):
             return True
         return False
 
     def _extract_sections_from_pdf(self, file_path: str) -> List[Dict[str, Any]]:
         """
-        Extracts text from PDF and groups paragraphs into sections by detecting headings.
-        Returns list of sections with 'title', 'page_number', and 'paragraphs'.
+        Improved: Extracts text from PDF and groups paragraphs into sections by detecting headings.
+        Uses improved heading detection and sentence tokenization for robustness.
         """
         sections = []
         doc = fitz.open(file_path)
@@ -78,16 +100,17 @@ class DocParserFastService:
                 text = block[4].replace('\r', ' ').replace('\n', ' ').strip()
                 if not text:
                     continue
-                if self._is_heading(text):
-                    # start new section
-                    if current_section["paragraphs"]:
-                        sections.append(current_section)
-                    section_counter += 1
-                    current_section = {"title": text, "page_number": page_index+1, "paragraphs": [], "section_index": section_counter}
-                else:
-                    current_section["paragraphs"].append(text)
+                # Split block into sentences for better granularity
+                sentences = nltk.sent_tokenize(text)
+                for sent in sentences:
+                    if self._is_heading(sent):
+                        if current_section["paragraphs"]:
+                            sections.append(current_section)
+                        section_counter += 1
+                        current_section = {"title": sent, "page_number": page_index+1, "paragraphs": [], "section_index": section_counter}
+                    else:
+                        current_section["paragraphs"].append(sent)
             if current_section["paragraphs"]:
-                # ensure section_index for untitled sections
                 if "section_index" not in current_section:
                     section_counter += 1
                     current_section["section_index"] = section_counter
@@ -120,10 +143,9 @@ class DocParserFastService:
                     })
             print(f"Extracted text using OCR from image: {os.path.basename(file_path)}")
         except pytesseract.TesseractNotFoundError:
-            print("TesseractNotFoundError: Tesseract is not installed or not in your PATH.")
-            print("Please install Tesseract OCR and ensure it's accessible.")
+            raise DocumentProcessingError("Tesseract is not installed or not in your PATH.")
         except Exception as e:
-            print(f"Error extracting text from image {os.path.basename(file_path)} using OCR: {e}")
+            raise DocumentProcessingError(f"Error extracting text from image {os.path.basename(file_path)} using OCR: {e}")
         return sections
 
     def _perform_semantic_chunking(self, text: str) -> List[str]:
@@ -134,8 +156,7 @@ class DocParserFastService:
         try:
             return self.semantic_splitter.split_text(text)
         except Exception as e:
-            print(f"Chunking failed: {e}")
-            return [text]  # fallback to whole text if even fallback splitter fails
+            raise DocumentProcessingError(f"Chunking failed: {e}")
 
     def process_document(self, file_path: str, source_doc_id: str, collection_name: Optional[str] = None) -> bool:
         """Process a document using fast rule-based chunking."""
@@ -187,30 +208,68 @@ class DocParserFastService:
 
             return success
         except Exception as e:
-            print(f"Error processing document {file_path}: {e}")
-            return False
+            raise DocumentProcessingError(f"Error processing document {file_path}: {e}")
 
-def process_document_background(
-    file_path: str, 
-    source_doc_id: str, 
-    doc_parser_svc_instance: DocParserFastService,
-    serial_no: Optional[int] = None, 
-    total_count: Optional[int] = None,
-    collection_name: Optional[str] = None
-):
-    parser_name = doc_parser_svc_instance.__class__.__name__
-    progress_log = f"Document {serial_no}/{total_count}" if serial_no and total_count else "Single document"
-    
-    print(f"Background task started for: {Path(file_path).name}, Source ID: {source_doc_id}, Parser: {parser_name}, ({progress_log})")
-    try:
-        success = doc_parser_svc_instance.process_document(
-            file_path=file_path, 
-            source_doc_id=source_doc_id,
-            collection_name=collection_name
-        )
-        if success:
-            print(f"Background processing completed successfully for {source_doc_id} ({Path(file_path).name}) using {parser_name}")
-        else:
-            print(f"Background processing (using {parser_name}) had issues or no chunks generated for {source_doc_id} ({Path(file_path).name})")
-    except Exception as e:
-        print(f"Error during background document processing for {source_doc_id} ({Path(file_path).name}) (using {parser_name}): {e}")
+    def extract_pdf_metadata(self, file_path: str) -> dict:
+        """
+        Extracts metadata (title, author, creation/publication date) from a PDF using fitz (PyMuPDF).
+        For arXiv PDFs, tries to extract from the first page or arXiv header if available.
+        """
+        doc = fitz.open(file_path)
+        meta = doc.metadata or {}
+        # Try to extract from PDF metadata
+        title = meta.get('title') or ''
+        author = meta.get('author') or ''
+        creation_date = meta.get('creationDate') or meta.get('modDate') or ''
+        # Try to extract from first page text (arXiv style)
+        first_page = doc[0].get_text("text") if len(doc) > 0 else ''
+        # Use regex to find arXiv-style author and date
+        arxiv_author = ''
+        arxiv_date = ''
+        arxiv_title = ''
+        # Title: often first non-empty line
+        for line in first_page.splitlines():
+            if not arxiv_title and line.strip() and len(line.strip()) > 5 and len(line.strip().split()) > 2:
+                arxiv_title = line.strip()
+            # Author: look for 'by' or typical author line
+            if not arxiv_author:
+                m = re.search(r'by\s+([A-Za-z,\-\s]+)', line, re.IGNORECASE)
+                if m:
+                    arxiv_author = m.group(1).strip()
+            # Date: look for year or arXiv submission line
+            if not arxiv_date:
+                m = re.search(r'(\d{4})', line)
+                if m:
+                    arxiv_date = m.group(1)
+            if arxiv_title and arxiv_author and arxiv_date:
+                break
+        doc.close()
+        return {
+            'title': arxiv_title or title,
+            'author': arxiv_author or author,
+            'publication_date': arxiv_date or creation_date
+        }
+
+    def extract_headings_from_pdf(self, file_path: str) -> List[str]:
+        """
+        Extracts all headings from a PDF using heuristics and regex (arXiv-style and general headings).
+        Returns a list of heading strings.
+        """
+        doc = fitz.open(file_path)
+        headings = []
+        heading_pattern = re.compile(r'^(\d+\.?)+\s+.+|^[A-Z][A-Z\s\-:]{4,}$')  # e.g. 1. Introduction, II. METHODS, etc.
+        for page in doc:
+            blocks = page.get_text("blocks", sort=True)
+            for block in blocks:
+                text = block[4].replace('\r', ' ').replace('\n', ' ').strip()
+                if not text:
+                    continue
+                # Split into lines for finer granularity
+                for line in text.split('. '):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if self._is_heading(line) or heading_pattern.match(line):
+                        headings.append(line)
+        doc.close()
+        return headings

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import logging
 
 from backend.app.services.vstore_svc import VectorStoreService
+from backend.app.core.mongodb import set_system_config, get_system_config
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -71,4 +72,21 @@ async def delete_collection(
             raise HTTPException(status_code=404, detail=f"Collection '{name}' not found")
         return {"message": f"Collection '{name}' deleted successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+
+@router.get("/current")
+async def get_current_collection():
+    """Get the current selected collection (system-wide)."""
+    current = get_system_config("current_collection")
+    if not current:
+        return {"current_collection": None}
+    return {"current_collection": current}
+
+@router.post("/current")
+async def set_current_collection(data: Dict[str, str]):
+    """Set the current selected collection (system-wide)."""
+    name = data.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Collection name required")
+    set_system_config("current_collection", name)
+    return {"message": f"Current collection set to '{name}'"}
